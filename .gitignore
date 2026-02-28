@@ -1,0 +1,34 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+*.egg
+
+# 虚拟环境
+.env/
+.venv/
+env/
+venv/
+
+# Conda
+.conda/
+
+# 注册结果（含敏感信息）
+result_grok/
+result_sso/
+
+# 调试截图
+grok_debug/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+Thumbs.db
+Desktop.ini
+.DS_Store

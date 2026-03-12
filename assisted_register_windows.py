@@ -34,6 +34,16 @@ os.makedirs(SSO_DIR, exist_ok=True)
 GROK_FILE = os.path.join(GROK_DIR, f"grok{timestamp}.txt")
 SSO_FILE = os.path.join(SSO_DIR, f"sso{timestamp}.txt")
 
+# 按钮文字正则（兼容中英文页面）
+SIGNUP_EMAIL_BTN_RE = re.compile(
+    r"Sign up with email|使用电子邮件注册|通过邮件注册|邮箱注册",
+    re.IGNORECASE
+)
+COMPLETE_SIGNUP_BTN_RE = re.compile(
+    r"Complete sign up|完成注册|提交注册",
+    re.IGNORECASE
+)
+
 first_names = ["James", "John", "Robert", "Michael", "William",
                "David", "Richard", "Joseph", "Thomas", "Charles"]
 last_names = ["Smith", "Johnson", "Williams", "Brown", "Jones",
@@ -127,6 +137,8 @@ def restart_chrome_process(port=9222, user_data_dir=None):
         "--window-size=500,800",
         "--no-first-run",
         "--no-default-browser-check",
+        "--lang=en-US",
+        "--accept-lang=en-US,en;q=0.9",
     ]
 
     try:
@@ -270,9 +282,9 @@ def run_job(thread_id, task_id, timeout_sec=120):
             except Exception as e:
                 log(f"[步骤2] 诊断异常: {e}")
 
-            # 点击 Sign up with email
+            # 点击 Sign up with email（兼容中英文页面）
             try:
-                btn = page.locator("button", has_text="Sign up with email").first
+                btn = page.locator("button", has_text=SIGNUP_EMAIL_BTN_RE).first
                 if btn.is_visible(timeout=3000):
                     btn.click()
                     log("[步骤2] 点击 'Sign up with email'")
@@ -394,7 +406,7 @@ def run_job(thread_id, task_id, timeout_sec=120):
             else:
                 log("[步骤5] Turnstile 未自动通过，手动点击...")
                 try:
-                    btn = page.locator("button", has_text="Complete sign up").first
+                    btn = page.locator("button", has_text=COMPLETE_SIGNUP_BTN_RE).first
                     if btn.is_visible(timeout=3000):
                         btn_box = btn.bounding_box()
                         if btn_box:
@@ -422,10 +434,10 @@ def run_job(thread_id, task_id, timeout_sec=120):
                 except Exception as e:
                     log(f"[步骤5] Turnstile 点击异常: {e}")
 
-            # 点击提交
+            # 点击提交（兼容中英文页面）
             log("[步骤5] 点击 'Complete sign up'...")
             try:
-                btn = page.locator("button", has_text="Complete sign up").first
+                btn = page.locator("button", has_text=COMPLETE_SIGNUP_BTN_RE).first
                 if btn.is_visible(timeout=2000):
                     btn.click(timeout=3000)
                     log("[步骤5] 提交按钮已点击")

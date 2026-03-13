@@ -34,6 +34,11 @@ os.makedirs(SSO_DIR, exist_ok=True)
 GROK_FILE = os.path.join(GROK_DIR, f"grok{timestamp}.txt")
 SSO_FILE = os.path.join(SSO_DIR, f"sso{timestamp}.txt")
 
+# Turnstile / 提交按钮相关超时与重试配置
+TURNSTILE_PASS_TIMEOUT_SEC = 15   # 等待 Turnstile 最终通过的最长秒数（兼容自动重试）
+MAX_SUBMIT_RETRIES = 5            # 点击"完成注册"按钮的最大重试次数
+FALLBACK_CLICK_INTERVAL_SEC = 4   # 步骤6等待期间补充点击提交按钮的时间间隔（秒）
+
 # 按钮文字正则（兼容中英文页面）
 SIGNUP_EMAIL_BTN_RE = re.compile(
     r"Sign up with email|使用电子邮件注册|通过邮件注册|邮箱注册",
@@ -260,10 +265,14 @@ def run_job(thread_id, task_id, timeout_sec=120):
                 raise TimeoutError("Timeout")
             log("[步骤2] 打开注册页面...")
             try:
-                page.goto("https://accounts.x.ai/sign-up?redirect=grok-com", timeout=20000)
-                log(f"[步骤2] 页面已加载 url={page.url}")
+                # 使用 domcontentloaded 而非默认的 load，避免等待所有资源导致转圈阻塞
+                page.goto("https://accounts.x.ai/sign-up?redirect=grok-com",
+                          wait_until="domcontentloaded", timeout=20000)
+                log(f"[步骤2] 页面 DOM 已就绪 url={page.url}")
             except Exception as e:
                 log(f"[步骤2] 页面加载异常(继续): {e}")
+            # 无论页面是否完全加载，等待 3 秒后继续执行后续步骤
+            time.sleep(3)
 
             # 诊断：输出页面标题和截图
             try:
@@ -434,22 +443,42 @@ def run_job(thread_id, task_id, timeout_sec=120):
                 except Exception as e:
                     log(f"[步骤5] Turnstile 点击异常: {e}")
 
-            # 点击提交（兼容中英文页面）
-            log("[步骤5] 点击 'Complete sign up'...")
-            try:
-                btn = page.locator("button", has_text=COMPLETE_SIGNUP_BTN_RE).first
-                if btn.is_visible(timeout=2000):
-                    btn.click(timeout=3000)
-                    log("[步骤5] 提交按钮已点击")
-                else:
-                    log("[步骤5] 提交按钮不可见")
-            except Exception as e:
-                log(f"[步骤5] 点击提交异常: {e}")
+            # 点击提交（兼容中英文页面）- 带等待和重试，处理 Turnstile 自动重试后的情况
+            log("[步骤5] 等待 Turnstile 最终通过并点击 'Complete sign up'...")
+            # 先等待 Turnstile 进入通过状态（最多 TURNSTILE_PASS_TIMEOUT_SEC 秒，兼容自动重试场景）
+            for _ in range(TURNSTILE_PASS_TIMEOUT_SEC):
+                if time.time() - job_start_time > timeout_sec:
+                    raise TimeoutError("Timeout")
+                if state["sso_found"] or check_turnstile_passed():
+                    break
+                time.sleep(1)
+
+            # 重试点击提交按钮（最多 MAX_SUBMIT_RETRIES 次），确保验证成功后能正确提交
+            for submit_attempt in range(MAX_SUBMIT_RETRIES):
+                if time.time() - job_start_time > timeout_sec:
+                    raise TimeoutError("Timeout")
+                if state["sso_found"]:
+                    break
+                try:
+                    btn = page.locator("button", has_text=COMPLETE_SIGNUP_BTN_RE).first
+                    if btn.is_visible(timeout=3000):
+                        btn.click(timeout=3000)
+                        log(f"[步骤5] 提交按钮已点击（第{submit_attempt + 1}次）")
+                        time.sleep(2)
+                        if state["sso_found"]:
+                            break
+                    else:
+                        log(f"[步骤5] 提交按钮不可见（第{submit_attempt + 1}次），等待后重试...")
+                        time.sleep(2)
+                except Exception as e:
+                    log(f"[步骤5] 点击提交异常（第{submit_attempt + 1}次）: {e}")
+                    time.sleep(1)
 
             # ---- 步骤 6: 等待结果 ----
-            log("[步骤6] 等待注册结果 (最多15s)...")
+            log("[步骤6] 等待注册结果 (最多20s)...")
             wait_start = time.time()
-            while time.time() - wait_start < 15:
+            last_submit_click = 0.0
+            while time.time() - wait_start < 20:
                 try:
                     cookies = context.cookies()
                     cookie_dict = {c['name']: c['value'] for c in cookies}
@@ -463,6 +492,18 @@ def run_job(thread_id, task_id, timeout_sec=120):
 
                 if state["sso_found"]:
                     break
+
+                # 每 FALLBACK_CLICK_INTERVAL_SEC 秒补充点击一次提交按钮，应对验证延迟后未自动提交的情况
+                if time.time() - last_submit_click >= FALLBACK_CLICK_INTERVAL_SEC:
+                    try:
+                        btn = page.locator("button", has_text=COMPLETE_SIGNUP_BTN_RE).first
+                        if btn.is_visible(timeout=500):
+                            btn.click(timeout=2000)
+                            log("[步骤6] 补充点击提交按钮")
+                            last_submit_click = time.time()
+                    except Exception:
+                        pass
+
                 time.sleep(1)
 
             if not state["sso_found"]:
